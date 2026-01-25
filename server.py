@@ -5,8 +5,39 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 from cf_api import CodeforcesAPI
 from analyzer import analyze_user
+from fastapi import FastAPI
+from pydantic import BaseModel
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
+
+# %% ---------------- API SETUP ----------------
+app = FastAPI(title="Codeforces Battle API", version="1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Request Model
+class ComparisonRequest(BaseModel):
+    user1_handle: str
+    user2_handle: str
+
+# Response Model
+class ComparisonResponse(BaseModel):
+    user1: str
+    user2: str
+    user1_score: float
+    user2_score: float
+    verdict_log: List[str]
+
+# %% ---------------- WORKFLOW SETUP ----------------
 
 # Setup LLM
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.8)
@@ -297,8 +328,8 @@ workflow.add_edge("final_summary", END)
 workflow.add_edge("unfair_comparison", END)
 
 # Compile
-app = workflow.compile()
-#print(app.get_graph().draw_ascii())
+graph_runner_app = workflow.compile()
+#print(graph_runner_app.get_graph().draw_ascii())
 # %% ---------------- EXECUTION ----------------
 
 # if __name__ == "__main__":
@@ -317,3 +348,37 @@ app = workflow.compile()
 
 
 # SERVER ENDPOINTS
+@app.post("/compare", response_model=ComparisonResponse)
+async def run_comparison(payload: ComparisonRequest):
+    """
+    Takes two handles, runs the LangGraph workflow, and returns the analysis.
+    """
+    initial_input = {
+        'user1_handle': payload.user1_handle,
+        'user2_handle': payload.user2_handle,
+        # Initialize default lists to avoid KeyErrors if append happens early
+        'llm_messages': [] 
+    }
+    
+    try:
+        result = graph_runner_app.invoke(initial_input)
+        
+        return {
+            "user1": result['user1_handle'],
+            "user2": result['user2_handle'],
+            "user1_score": result.get('user1_score', 0.0),
+            "user2_score": result.get('user2_score', 0.0),
+            "verdict_log": result.get('llm_messages', ["No analysis generated."])
+        }
+    
+    except Exception as e:
+        print(f"Error executing workflow: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "model": "gemini-2.5-flash"}
+
+if __name__ == "__main__":
+    # Run using: python server.py
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)

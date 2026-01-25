@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from a import run_comparison_workflow
+from server import run_comparison_workflow
 
 app = FastAPI()
 
