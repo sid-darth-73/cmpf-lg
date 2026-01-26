@@ -10,6 +10,8 @@ from pydantic import BaseModel
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+import json
 
 load_dotenv()
 
@@ -39,10 +41,10 @@ class ComparisonResponse(BaseModel):
 
 # %% ---------------- WORKFLOW SETUP ----------------
 
-# Setup LLM
+# LLM
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.8)
 
-# %% ---------------- STATE DEFINITION ----------------
+# STATE DEFINITION 
 class ComparisonState(TypedDict):
     user1_handle: str
     user2_handle: str
@@ -55,7 +57,7 @@ class ComparisonState(TypedDict):
     user2_score: float
     llm_messages: List[str]
 
-# %% ---------------- NODES ----------------
+# NODES 
 
 def fetch(state: ComparisonState) -> ComparisonState:
     messages = state.get('llm_messages', [])
@@ -374,6 +376,69 @@ async def run_comparison(payload: ComparisonRequest):
     except Exception as e:
         print(f"Error executing workflow: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/compare/stream")
+async def run_comparison_stream(payload: ComparisonRequest):
+    """
+    Streams analysis updates node-by-node using Server-Sent Events (SSE).
+    """
+    initial_input = {
+        'user1_handle': payload.user1_handle,
+        'user2_handle': payload.user2_handle,
+        'llm_messages': [] 
+    }
+
+    async def event_generator():
+        # Nodes that actually generate text we want to show
+        content_nodes = {
+            "delta_rating", 
+            "consistency_contest", 
+            "quality_ratio", 
+            "total_problems", 
+            "unfair_comparison",
+            "final_summary"
+        }
+
+        # Iterate through the graph execution steps
+        async for chunk in graph_runner_app.astream(initial_input):
+            for node_name, state_update in chunk.items():
+                
+                # 1. STREAM INTERMEDIATE UPDATES
+                if node_name in content_nodes:
+                    messages = state_update.get('llm_messages', [])
+                    
+                    if messages:
+                        # Get the latest message appended by this specific node
+                        latest_message = messages[-1]
+                        
+                        # Construct a JSON payload for the UI
+                        update_payload = {
+                            "type": "update",
+                            "node": node_name,
+                            "message": latest_message,
+                            # Stream scores real-time for UI progress bars
+                            "current_scores": {
+                                "user1": state_update.get('user1_score', 0.0),
+                                "user2": state_update.get('user2_score', 0.0)
+                            }
+                        }
+                        yield f"data: {json.dumps(update_payload)}\n\n"
+
+                # 2. STREAM FINAL VERDICT
+                if node_name in ["final_summary", "unfair_comparison"]:
+                    # Terminating node reached, send the full summary object
+                    final_payload = {
+                        "type": "complete",
+                        "user1": state_update.get('user1_handle'),
+                        "user2": state_update.get('user2_handle'),
+                        "user1_score": state_update.get('user1_score', 0.0),
+                        "user2_score": state_update.get('user2_score', 0.0),
+                        "verdict_log": state_update.get('llm_messages', [])
+                    }
+                    yield f"data: {json.dumps(final_payload)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 
 @app.get("/health")
 def health_check():
