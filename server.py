@@ -445,5 +445,4 @@ def health_check():
     return {"status": "ok", "model": "gemini-2.5-flash"}
 
 if __name__ == "__main__":
-    # Run using: python server.py
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
