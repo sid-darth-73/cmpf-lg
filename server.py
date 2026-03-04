@@ -440,9 +440,9 @@ async def run_comparison_stream(payload: ComparisonRequest):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@app.get("/")
+@app.get("/health", methods=["GET", "HEAD"])
 def health_check():
-    return {"status": "ok", "model": "gemini-2.5-flash"}
+    return {"status": "ok"}
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
