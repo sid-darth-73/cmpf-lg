@@ -440,7 +440,7 @@ async def run_comparison_stream(payload: ComparisonRequest):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@app.get("/health")
+@app.get("/")
 def health_check():
     return {"status": "ok", "model": "gemini-2.5-flash"}
 
