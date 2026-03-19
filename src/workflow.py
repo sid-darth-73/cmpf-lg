@@ -5,44 +5,28 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 from cf_api import CodeforcesAPI
 from analyzer import analyze_user
-from fastapi import FastAPI
-from pydantic import BaseModel
-import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-import json
+
 
 load_dotenv()
 
-# %% ---------------- API SETUP ----------------
-app = FastAPI(title="Codeforces Battle API", version="1.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Request Model
-class ComparisonRequest(BaseModel):
-    user1_handle: str
-    user2_handle: str
-
-# Response Model
-class ComparisonResponse(BaseModel):
-    user1: str
-    user2: str
-    user1_score: float
-    user2_score: float
-    verdict_log: List[str]
-
 # %% ---------------- WORKFLOW SETUP ----------------
+import time
 
 # LLM
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.8)
+# Applying a robust client timeout and declaring the model
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.8, timeout=120.0)
+
+def invoke_llm_with_retry(prompt: str, max_retries: int = 3) -> str:
+    """Wraps LLM invocations in a robust retry block to handle transient 'Connection reset by peer' API errors."""
+    for attempt in range(max_retries):
+        try:
+            return llm.invoke(prompt).content
+        except Exception as e:
+            if attempt == max_retries - 1:
+                print(f"LLM invoke failed after {max_retries} attempts: {e}")
+                raise e
+            print(f"Transient LLM network error ({e}), retrying {attempt + 1}/{max_retries}...")
+            time.sleep(2)
 
 # STATE DEFINITION 
 class ComparisonState(TypedDict):
@@ -62,8 +46,11 @@ class ComparisonState(TypedDict):
 def fetch(state: ComparisonState) -> ComparisonState:
     messages = state.get('llm_messages', [])
     api = CodeforcesAPI()
+    # NOTE: shorten the respnse to just the necessary data to save time and token costs
     state['user1_data'] = api.get_user_data(state['user1_handle'])
     state['user2_data'] = api.get_user_data(state['user2_handle'])
+    #NOTE: perform a cache check to get analysis for a handle it it was already analyuzed in a previous request to save time and costs. 
+    #This is possible because the analysis is deterministic and only depends on the handle's data, not the opponent.
     state['user1_analysis'] = analyze_user(state['user1_data'])
     state['user2_analysis'] = analyze_user(state['user2_data'])
     state['user1_score'] = 0.0
@@ -121,7 +108,7 @@ def delta_rating_node(state: ComparisonState) -> ComparisonState:
         3. If the gap is > 400, follow the IMPORTANT instruction above.
         4. Give one specific tip to {lagger} about how to gain +{delta} rating (e.g., mention specific problem ratings to target).
         """
-        response = llm.invoke(prompt).content
+        response = invoke_llm_with_retry(prompt)
         state['llm_messages'].append(f"**Rating Face-off:** {response}")
 
     return state
@@ -166,7 +153,7 @@ def consistency_contest_node(state: ComparisonState) -> ComparisonState:
     3. If 'stable', call it a plateau.
     4. Provide specific advice to the loser: Mention "virtual contests" or "upsolving" to fix their specific trend issue.
     """
-    response = llm.invoke(prompt).content
+    response = invoke_llm_with_retry(prompt)
     state['llm_messages'].append(f"**Momentum Check:** {response}")
     
     return state
@@ -195,7 +182,7 @@ def quality_ratio_node(state: ComparisonState) -> ComparisonState:
     2. Playfully mock the user with the lower ratio for "polluting the judge queue."
     3. Suggestion: Tell the lower accuracy user to read the problem statement twice or use "assert()" before submitting.
     """
-    response = llm.invoke(prompt).content
+    response = invoke_llm_with_retry(prompt)
     state['llm_messages'].append(f"**Accuracy Analysis:** {response}")
     
     return state
@@ -237,7 +224,7 @@ def total_problems_node(state: ComparisonState) -> ComparisonState:
     2. If the scores are close, call it a "battle of diligence."
     3. Suggestion for the user with fewer problems: Mention specific problem tags (e.g., DP, Graphs) they are likely missing out on due to lack of practice.
     """
-    response = llm.invoke(prompt).content
+    response = invoke_llm_with_retry(prompt)
     state['llm_messages'].append(f"**The Grind:** {response}")
     
     return state
@@ -253,7 +240,7 @@ def unfair_comparison_node(state: ComparisonState) -> ComparisonState:
     State clearly that this is bullying, not a competition.
     Tell the lower rated user to come back when they are stronger.
     """
-    response = llm.invoke(prompt).content
+    response = invoke_llm_with_retry(prompt)
     state['llm_messages'].append(f"**MATCH CANCELLED:** {response}")
     return state
 
@@ -287,7 +274,7 @@ def final_summary_node(state: ComparisonState) -> ComparisonState:
     4. **The Path Forward:** A genuine, high-level improvement plan for the loser (e.g., "Fix your accuracy and upsolve more Div3 E's").
     """
     
-    res = llm.invoke(prompt).content
+    res = invoke_llm_with_retry(prompt)
     state['llm_messages'].append(f"\n--- FINAL VERDICT ---\n{res}")
     return state
 
@@ -331,119 +318,4 @@ workflow.add_edge("unfair_comparison", END)
 
 # Compile
 graph_runner_app = workflow.compile()
-#print(graph_runner_app.get_graph().draw_ascii())
-# %% ---------------- EXECUTION ----------------
-
-# if __name__ == "__main__":
-#     initial_input = {
-#         'user1_handle': 'unbit',
-#         'user2_handle': 'tourist'
-#     }
-    
-#     print("Running Comparison Workflow...")
-#     result = app.invoke(initial_input)
-    
-#     print("\n\n" + "="*30)
-#     for msg in result['llm_messages']:
-#         print(msg)
-#         print("-" * 20)
-
-
-# SERVER ENDPOINTS
-@app.post("/compare", response_model=ComparisonResponse)
-async def run_comparison(payload: ComparisonRequest):
-    """
-    Takes two handles, runs the LangGraph workflow, and returns the analysis.
-    """
-    initial_input = {
-        'user1_handle': payload.user1_handle,
-        'user2_handle': payload.user2_handle,
-        # Initialize default lists to avoid KeyErrors if append happens early
-        'llm_messages': [] 
-    }
-    
-    try:
-        result = graph_runner_app.invoke(initial_input)
-        
-        return {
-            "user1": result['user1_handle'],
-            "user2": result['user2_handle'],
-            "user1_score": result.get('user1_score', 0.0),
-            "user2_score": result.get('user2_score', 0.0),
-            "verdict_log": result.get('llm_messages', ["No analysis generated."])
-        }
-    
-    except Exception as e:
-        print(f"Error executing workflow: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    
-@app.post("/compare/stream")
-async def run_comparison_stream(payload: ComparisonRequest):
-    """
-    Streams analysis updates node-by-node using Server-Sent Events (SSE).
-    """
-    initial_input = {
-        'user1_handle': payload.user1_handle,
-        'user2_handle': payload.user2_handle,
-        'llm_messages': [] 
-    }
-
-    async def event_generator():
-        # Nodes that actually generate text we want to show
-        content_nodes = {
-            "delta_rating", 
-            "consistency_contest", 
-            "quality_ratio", 
-            "total_problems", 
-            "unfair_comparison",
-            "final_summary"
-        }
-
-        # Iterate through the graph execution steps
-        async for chunk in graph_runner_app.astream(initial_input):
-            for node_name, state_update in chunk.items():
-                
-                # 1. STREAM INTERMEDIATE UPDATES
-                if node_name in content_nodes:
-                    messages = state_update.get('llm_messages', [])
-                    
-                    if messages:
-                        # Get the latest message appended by this specific node
-                        latest_message = messages[-1]
-                        
-                        # Construct a JSON payload for the UI
-                        update_payload = {
-                            "type": "update",
-                            "node": node_name,
-                            "message": latest_message,
-                            # Stream scores real-time for UI progress bars
-                            "current_scores": {
-                                "user1": state_update.get('user1_score', 0.0),
-                                "user2": state_update.get('user2_score', 0.0)
-                            }
-                        }
-                        yield f"data: {json.dumps(update_payload)}\n\n"
-
-                # 2. STREAM FINAL VERDICT
-                if node_name in ["final_summary", "unfair_comparison"]:
-                    # Terminating node reached, send the full summary object
-                    final_payload = {
-                        "type": "complete",
-                        "user1": state_update.get('user1_handle'),
-                        "user2": state_update.get('user2_handle'),
-                        "user1_score": state_update.get('user1_score', 0.0),
-                        "user2_score": state_update.get('user2_score', 0.0),
-                        "verdict_log": state_update.get('llm_messages', [])
-                    }
-                    yield f"data: {json.dumps(final_payload)}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
-@app.get("/health")
-@app.head("/health")
-def health_check():
-    return {"status": "ok"}
-
-if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+#exported_graph = graph_runner_app.export()

@@ -1,0 +1,28 @@
+
+Upsolve list for unbit:
+Contest 2055 - Problem D: Scarecrow
+Contest 2063 - Problem D: Game With Triangles
+Contest 2064 - Problem E: Mycraft Sand Sort
+Contest 2109 - Problem C3: Hacking Numbers (Hard Version)
+Contest 2110 - Problem D: Fewer Batteries
+Contest 2111 - Problem E: Changing the String
+Contest 1987 - Problem E: Wonderful Tree!
+Contest 1988 - Problem D: The Omnipotent Monster Killer
+Contest 1989 - Problem C: Two Movies
+Contest 2118 - Problem D1: Red Light, Green Light (Easy version)
+Contest 1992 - Problem G: Ultra-Meow
+Contest 2119 - Problem D: Token Removing
+Contest 2122 - Problem D: Traffic Lights
+Contest 2124 - Problem D: Make a Palindrome
+Contest 2125 - Problem E: Sets of Complementary Sums
+Contest 2000 - Problem C: Numeric String Template
+Contest 2128 - Problem E1: Submedians (Easy Version)
+Contest 2025 - Problem E: Card Game
+Contest 1899 - Problem B: 250 Thousand Tons of TNT
+Contest 2027 - Problem D2: The Endspeaker (Hard Version)
+Contest 2030 - Problem D: QED's Favorite Permutation
+Contest 1904 - Problem A: Forked!
+Contest 1907 - Problem B: YetnotherrokenKeoard
+Contest 1913 - Problem A: Rating Increase
+Contest 2042 - Problem D: Recommendations
+Contest 2173 - Problem D: Taiga's Carry Chains
